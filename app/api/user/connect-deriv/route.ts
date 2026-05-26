@@ -1,57 +1,73 @@
+// app/api/user/connect-deriv/route.ts
+import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { auth } from '@clerk/nextjs';
 import { createClient } from '@supabase/supabase-js';
-import { discoverDerivAccounts } from '@/lib/deriv/auth';
+import { discoverDerivAccounts } from '../../../../lib/deriv/auth';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+// Initialize the administrative Supabase client using your Master Config keys
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export async function POST(request: Request) {
   try {
-    const { userId } = auth();
+    // 1. Authenticate user using modern asynchronous Clerk Engine
+    const { userId } = await auth();
+    
     if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized session' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Unauthorized: Access Denied' }, 
+        { status: 401 }
+      );
     }
 
-    const { token } = await request.json();
-    if (!token || token.trim() === '') {
-      return NextResponse.json({ error: 'Personal Access Token is required' }, { status: 400 });
+    // 2. Parse request payload and catch any variation of the token key name
+    const body = await request.json();
+    
+    // This looks for apiToken, token, pat, or bearerToken automatically
+    const apiToken = body.apiToken || body.token || body.pat || body.bearerToken;
+
+    if (!apiToken) {
+      return NextResponse.json(
+        { error: 'Bad Request: Deriv API Token is missing from payload' }, 
+        { status: 400 }
+      );
     }
 
-    // Hit the current 2026 Deriv Architecture via our server-side utility
-    const discoveredAccounts = await discoverDerivAccounts(token.trim());
+    // 3. Initiate handshake/discovery protocol with the Deriv API
+    const accounts = await discoverDerivAccounts(apiToken);
 
-    if (!discoveredAccounts || discoveredAccounts.length === 0) {
-      return NextResponse.json({ error: 'No active trading portfolios detected for this token.' }, { status: 404 });
-    }
-
-    // Pull the active demo identity to bind standard configurations
-    const targetAccount = discoveredAccounts.find(acc => acc.account_type === 'demo') || discoveredAccounts[0];
-
-    // Upsert user profile into Supabase using Clerk ID mapped directly to our schema structure
+    // 4. Record/Upsert the connected profiles to your Supabase platform
+    // Note: Adjust table name ('user_deriv_connections') to match your schema if necessary
     const { error: dbError } = await supabase
-      .from('users')
+      .from('user_deriv_connections')
       .upsert({
-        id: userId, // Clerk Identity mapped as primary UUID string key
-        deriv_app_id: process.env.DERIV_APP_ID || '33mZdzOJ000s1hj182NFG',
-        deriv_token: token.trim(),
-        deriv_account_id: targetAccount.account_id,
-        status: 'pending' // Enforce verification status logic for Lord Khalif
-      }, { onConflict: 'id' });
+        user_id: userId,
+        api_token: apiToken,
+        accounts: accounts,
+        updated_at: new Date().toISOString(),
+      });
 
     if (dbError) {
-      throw new Error(`Database transaction rejected: ${dbError.message}`);
+      console.error('Supabase Core Sync Exception:', dbError);
+      return NextResponse.json(
+        { error: 'Database Synchronization Failed' }, 
+        { status: 500 }
+      );
     }
 
+    // 5. Successful connection response
     return NextResponse.json({ 
       success: true, 
-      accounts: discoveredAccounts,
-      selected_target: targetAccount.account_id 
+      message: 'Deriv accounts mapped successfully',
+      accounts 
     });
+
   } catch (error: any) {
-    console.error('Handshake verification error:', error.message);
-    return NextResponse.json({ error: error.message || 'Internal connection failure' }, { status: 500 });
+    console.error('Handshake failure at connect-deriv core:', error);
+    return NextResponse.json(
+      { error: error.message || 'Internal Architectural Failure' }, 
+      { status: 500 }
+    );
   }
 }

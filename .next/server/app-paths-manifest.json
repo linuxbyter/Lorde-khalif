@@ -1,1 +1,12 @@
-{}
+{
+  "/_not-found": "app/_not-found.js",
+  "/admin/approve-node/route": "app/admin/approve-node/route.js",
+  "/api/bot/control/route": "app/api/bot/control/route.js",
+  "/api/bots/stop/route": "app/api/bots/stop/route.js",
+  "/api/bots/start/route": "app/api/bots/start/route.js",
+  "/api/user/connect-deriv/route": "app/api/user/connect-deriv/route.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/page": "app/page.js",
+  "/sign-in/[[...sign-in]]/page": "app/sign-in/[[...sign-in]]/page.js",
+  "/sign-up/[[...sign-up]]/page": "app/sign-up/[[...sign-up]]/page.js"
+}
