@@ -15,20 +15,7 @@ export async function POST(req: Request) {
     const { bot_type } = await req.json();
     if (!bot_type) return NextResponse.json({ error: 'Missing strategy classification type' }, { status: 400 });
 
-    // Consolidated: Query user_nodes instead of the deleted users table
-    const { data: node, error: nodeError } = await supabase
-      .from('user_nodes')
-      .select('status')
-      .or(`id.eq.${userId},user_id.eq.${userId}`)
-      .single();
-
-    if (nodeError || !node || node.status !== 'approved') {
-      return NextResponse.json(
-        { error: 'Access denied. Deployment requires admin account authorization verification.' },
-        { status: 403 }
-      );
-    }
-
+    // Open gate pass-through
     const { error: botError } = await supabase.from('bots').upsert(
       {
         user_id: userId,
