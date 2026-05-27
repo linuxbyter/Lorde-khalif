@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { createClient } from '@supabase/supabase-js';
-import { executeStrategy } from '../../../lib/ots/engine';
+import { executeStrategy } from '../../../../lib/ots/engine';
 
 export async function POST(req: Request) {
   try {
