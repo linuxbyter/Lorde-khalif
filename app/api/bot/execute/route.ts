@@ -1,102 +1,78 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
 import { createClient } from '@supabase/supabase-js';
-import { DerivWebSocketManager } from '../../../../lib/deriv/websocket';
+import { executeStrategy } from '../../../lib/ots/engine';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-export async function GET() {
-  return NextResponse.json({ status: "ok" });
-}
-
-export async function POST(request: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const signal = await request.json();
-    const { bot_id, user_id, symbol, contract_type, stake } = signal;
-
-    if (!bot_id || !user_id || !symbol || !contract_type || !stake) {
-      return NextResponse.json({ error: 'Missing parameters' }, { status: 400 });
+    // 1. Authenticate the incoming request session via Clerk
+    const { userId: clerkUserId } = auth();
+    if (!clerkUserId) {
+      return NextResponse.json({ error: 'Unauthorized session' }, { status: 401 });
     }
 
-    const { data: botData, error: botError } = await supabase
-      .from('bots')
-      .select('status')
-      .eq('id', bot_id)
-      .eq('user_id', user_id)
-      .single();
+    // 2. Parse the trading signal payload parameters
+    const body = await req.json();
+    const { bot_id, symbol, contract_type, stake, duration } = body;
 
-    if (botError || botData?.status !== 'running') {
-      return NextResponse.json({ error: 'Bot inactive or invalid' }, { status: 400 });
+    if (!symbol || !contract_type || !stake) {
+      return NextResponse.json({ error: 'Missing critical signal parameters' }, { status: 400 });
     }
 
-    const { data: userNode, error: userError } = await supabase
+    // 3. Initialize Supabase Admin Client
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // 4. Fetch the specific user's encrypted Deriv credentials
+    const { data: userNode, error: nodeError } = await supabase
       .from('user_nodes')
       .select('deriv_token, selected_account_id, account_type')
-      .eq('clerk_user_id', user_id)
-      .eq('status', 'approved')
+      .eq('clerk_user_id', clerkUserId)
       .single();
 
-    if (userError || !userNode) {
-      return NextResponse.json({ error: 'Credentials unavailable' }, { status: 403 });
-    }
-
-    const wsManager = new DerivWebSocketManager(
-      userNode.deriv_token,
-      user_id,
-      userNode.selected_account_id,
-      userNode.account_type === 'demo'
-    );
-
-    await wsManager.connect();
-    const tradeResult = await wsManager.buyContract(symbol, contract_type, stake, 5);
-    
-    if (!tradeResult.success) {
-      wsManager.disconnect();
+    if (nodeError || !userNode || !userNode.deriv_token) {
       return NextResponse.json({ 
-        error: tradeResult.error || 'Execution rejected',
-        deriv_stream_history: tradeResult.logs || []
-      }, { status: 400 });
+        error: 'Deriv account context not found. Please connect your account via OAuth first.' 
+      }, { status: 404 });
     }
 
-    const { data: insertedTrade } = await supabase
-      .from('trades')
-      .insert({
-        bot_id,
-        user_id,
-        symbol,
-        contract_type,
-        stake,
-        contract_id: tradeResult.contract_id,
-        status: 'pending'
-      })
-      .select()
-      .single();
+    // 5. Pack the context parameters dynamically for the execution engine
+    const context = {
+      token: userNode.deriv_token,
+      accountId: userNode.selected_account_id,
+      userId: clerkUserId,
+      isDemo: userNode.account_type === 'demo'
+    };
 
-    wsManager.subscribeToContract(tradeResult.contract_id!).then(async (finalUpdate) => {
-      if (finalUpdate && insertedTrade) {
-        await supabase
-          .from('trades')
-          .update({
-            status: finalUpdate.status,
-            profit: finalUpdate.status === 'won' ? stake * 0.95 : -stake
-          })
-          .eq('id', insertedTrade.id);
-      }
-      wsManager.disconnect();
-    });
+    const signal = {
+      symbol,
+      type: contract_type, // Expects 'CALL' or 'PUT'
+      stake: Number(stake),
+      duration: duration ? Number(duration) : 5
+    };
 
+    console.log(`[API Execute] Forwarding signal to OTS engine for user: ${clerkUserId}`);
+
+    // 6. Fire the transaction flight path
+    const tradeResult = await executeStrategy(context, signal);
+
+    if (!tradeResult.success) {
+      return NextResponse.json({ 
+        success: false, 
+        error: tradeResult.error 
+      }, { status: 500 });
+    }
+
+    // 7. Return the completed contract data back to your dashboard interface
     return NextResponse.json({
       success: true,
-      mode: "production",
-      contract_id: tradeResult.contract_id
+      contract_id: tradeResult.contract_id,
+      buy_price: tradeResult.buy_price
     });
 
   } catch (error: any) {
-    return NextResponse.json({ 
-      error: 'Execution runtime exception thrown',
-      message: error?.message || String(error)
-    }, { status: 500 });
+    console.error('[API Execute Exception]:', error);
+    return NextResponse.json({ error: 'Internal execution exception intercept' }, { status: 500 });
   }
 }
