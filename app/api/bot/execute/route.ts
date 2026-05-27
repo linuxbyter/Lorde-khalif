@@ -5,13 +5,11 @@ import { executeStrategy } from '../../../../lib/ots/engine';
 
 export async function POST(req: Request) {
   try {
-    // 1. Authenticate the incoming request session via Clerk
     const { userId: clerkUserId } = auth();
     if (!clerkUserId) {
       return NextResponse.json({ error: 'Unauthorized session' }, { status: 401 });
     }
 
-    // 2. Parse the trading signal payload parameters
     const body = await req.json();
     const { bot_id, symbol, contract_type, stake, duration } = body;
 
@@ -19,12 +17,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing critical signal parameters' }, { status: 400 });
     }
 
-    // 3. Initialize Supabase Admin Client
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 4. Fetch the specific user's encrypted Deriv credentials
     const { data: userNode, error: nodeError } = await supabase
       .from('user_nodes')
       .select('deriv_token, selected_account_id, account_type')
@@ -37,7 +33,6 @@ export async function POST(req: Request) {
       }, { status: 404 });
     }
 
-    // 5. Pack the context parameters dynamically for the execution engine
     const context = {
       token: userNode.deriv_token,
       accountId: userNode.selected_account_id,
@@ -47,15 +42,15 @@ export async function POST(req: Request) {
 
     const signal = {
       symbol,
-      type: contract_type, // Expects 'CALL' or 'PUT'
+      type: contract_type as 'CALL' | 'PUT',
       stake: Number(stake),
       duration: duration ? Number(duration) : 5
     };
 
     console.log(`[API Execute] Forwarding signal to OTS engine for user: ${clerkUserId}`);
 
-    // 6. Fire the transaction flight path
-    const tradeResult = await executeStrategy(context, signal);
+    // Pass as a single clean configuration object
+    const tradeResult = await executeStrategy({ context, signal });
 
     if (!tradeResult.success) {
       return NextResponse.json({ 
@@ -64,7 +59,6 @@ export async function POST(req: Request) {
       }, { status: 500 });
     }
 
-    // 7. Return the completed contract data back to your dashboard interface
     return NextResponse.json({
       success: true,
       contract_id: tradeResult.contract_id,

@@ -1,26 +1,48 @@
 import { DerivWebSocketManager } from '../deriv/websocket';
 
-export async function executeStrategy(signal: { symbol: string, type: 'CALL' | 'PUT', stake: number }) {
+interface ExecutionContext {
+  token: string;
+  accountId: string;
+  userId: string;
+  isDemo?: boolean;
+}
+
+interface SignalPayload {
+  symbol: string;
+  type: 'CALL' | 'PUT';
+  stake: number;
+  duration?: number;
+}
+
+export async function executeStrategy({ context, signal }: { context: ExecutionContext; signal: SignalPayload }) {
   const manager = new DerivWebSocketManager(
-    process.env.DERIV_TOKEN!, 
-    process.env.DERIV_USER_ID!, 
-    process.env.DERIV_ACCOUNT_ID!
+    context.token, 
+    context.userId, 
+    context.accountId, 
+    context.isDemo ?? true
   );
 
   try {
+    console.log(`[OTS Engine] Initializing dynamic handshake for User: ${context.userId} on Account: ${context.accountId}`);
     await manager.connect();
     
-    // Execute trade
+    console.log(`[OTS Engine] Handshake cleared. Dispatching order: ${signal.type} on ${signal.symbol} ($${signal.stake})`);
+    
     const result = await manager.buyContract(
       signal.symbol,
       signal.type,
       signal.stake,
-      5 // duration in ticks
+      signal.duration || 5
     );
 
+    manager.disconnect();
     return result;
-  } catch (err) {
-    console.error('OTS Execution Error:', err);
-    return { success: false, error: err };
+  } catch (err: any) {
+    console.error(`[OTS Engine] Execution aborted for User ${context.userId}:`, err);
+    manager.disconnect();
+    return { 
+      success: false, 
+      error: err.message || 'Internal OTS strategy runtime exception' 
+    };
   }
 }
