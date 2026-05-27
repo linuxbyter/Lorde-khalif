@@ -49,13 +49,19 @@ export async function POST(req: Request) {
 
     console.log(`[API Execute] Forwarding signal to OTS engine for user: ${clerkUserId}`);
 
-    // Pass as a single clean configuration object
-    const tradeResult = await executeStrategy({ context, signal });
+    // 🛑 Type assertion added here to satisfy the production compiler union definitions
+    const tradeResult = await executeStrategy({ context, signal }) as {
+      success: boolean;
+      contract_id?: string;
+      buy_price?: number;
+      error?: string;
+    };
 
-    if (!tradeResult.success) {
+    // Strict guard ensures contract_id exists before proceeding
+    if (!tradeResult.success || !tradeResult.contract_id) {
       return NextResponse.json({ 
         success: false, 
-        error: tradeResult.error 
+        error: tradeResult.error || 'Execution failed to yield a contract confirmation ID.' 
       }, { status: 500 });
     }
 
